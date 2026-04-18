@@ -1,99 +1,124 @@
 # isoparse
 
-Package isoparse parses strings representing ISO-8601-conformant datetimes,
-dates, and times into instances of Go's `time.Time`.
+[![CI](https://github.com/bsolomon1124/isoparse/actions/workflows/ci.yml/badge.svg)](https://github.com/bsolomon1124/isoparse/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/bsolomon1124/isoparse.svg)](https://pkg.go.dev/github.com/bsolomon1124/isoparse)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bsolomon1124/isoparse)](https://goreportcard.com/report/github.com/bsolomon1124/isoparse)
+[![Coverage](https://img.shields.io/badge/coverage-99.5%25-brightgreen)](#testing)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-Most of its parsing logic is ported directly from the isoparser module,
-authored by Paul Ganssle, within Python's dateutil library.
+Package `isoparse` parses ISO 8601 date, time, and datetime strings into Go `time.Time` values — without requiring the caller to specify a layout in advance.
 
-Unlike the parser in Go's time package, isoparse's functions do not require
-the precise format to be specified in advance.
+It is a Go port of the `isoparser` module (by Paul Ganssle) from Python's [`dateutil`](https://github.com/dateutil/dateutil) library, adapted to Go's `time` package semantics.
 
-It does not make every attempt to mirror Python's dateutil exactly,
-partially because of differences in behavior between Python and Go.
+## Install
 
-The isoparse package exports three parsing functions:
+Requires Go 1.25 or newer.
 
-- `ParseISODatetime`: parses a datetime (combined date and time string). Note that this function can also parse just a date in isolation, but if the user knows that input strings contain only dates with no time components, it will be faster to use ParseISODate.
-- `ParseISODate`: parses a date string with no time component.
-- `ParseISOTime`: parses a time string with no date component. This does not return a time.Time instance, but rather the hour/minute/second/nsec components and the location.
+```
+go get github.com/bsolomon1124/isoparse
+```
 
-## A Note On Time Zone Handling
-
-Python's datetime has a concept of a naive datetime:
-
-> A naive object does not contain enough information to unambiguously locate itself relative to other date/time objects.
-
-This is useful in situations where, given a datetime string such as
-"2018-09-27T11:52:59", it is left up to the user to determine which time
-zone should added as an attribute, if any at all. Contrarily, Go's
-time.Date, which produces a time.Time instance, has a required location
-parameter whose nil value is UTC, and is an unexported struct field that
-cannot be changed independently of changing the timestamp itself.
-
-For that reason:
-
-- All datetimes and times that lack a visible offset will have `time.Local` attached to them. This represents a "best assumption" that the datetime string is from the package user's local time zone.
-- This package also exports a simple function `SetLoc` that produces a new `time.Time` given a different time zone but the same timestamp components.  This is different from Go's `time.Time.In`, `time.Time.UTC`, or `time.Time.Local` in that these conversions may change attributes such as `t.Hour` in the resulting timestamp itself.
-
-Note also that input strings that do contain a recognizable UTC offset will
-be given a loc that is the result of time.FixedZone, with the generic name
-of "UTC" and a specified seconds-east offset from UTC. There is no attempt
-to determine an IANA time zone by name because, for instance, an offset of
--05:00 is still ambiguous based on whether daylight savings time is in
-effect or not.
-
-Because `time.Time.String` uses:
+## Usage
 
 ```go
-func (t Time) String() string {
-	s := t.Format("2006-01-02 15:04:05.999999999 -0700 MST")
-	...
+package main
+
+import (
+	"fmt"
+
+	"github.com/bsolomon1124/isoparse"
+)
+
+func main() {
+	t, err := isoparse.ParseDatetime("2024-03-15T14:30:00Z")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(t) // 2024-03-15 14:30:00 +0000 UTC
+
+	d, _ := isoparse.ParseDate("2024-W11-5")
+	fmt.Println(d) // 2024-03-15 00:00:00 ...
+
+	hms, loc, _ := isoparse.ParseTime("14:30:00+02:00")
+	fmt.Println(hms, loc) // [14 30 0 0] UTC
 }
 ```
 
-The `time.Time` resulting from isoparse's parsing functions will have a loc that
-looks like `time.FixedZone("UTC", secondsEast)` and will be printed as:
+Full API documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/bsolomon1124/isoparse).
 
-    YYYY-MM-DD HH:MM:SS.sssssssss -HHMM UTC
+## Supported formats
 
-If you want more control over the actual resulting format, use
-`time.Time.Format` on the result.
+Dates:
 
-## Conformance And Nonconformance To ISO-8601
+| Format       | Example        |
+|--------------|----------------|
+| `YYYY`       | `2024`         |
+| `YYYY-MM`    | `2024-03`      |
+| `YYYY-MM-DD` | `2024-03-15`   |
+| `YYYYMMDD`   | `20240315`     |
+| `YYYY-DDD`   | `2024-075`     (ordinal) |
+| `YYYYDDD`    | `2024075`      (ordinal) |
+| `YYYY-Www-D` | `2024-W11-5`   (ISO week) |
+| `YYYYWwwD`   | `2024W115`     (ISO week) |
 
-isoparse conforms mostly to the [December 2004 ISO Standard 8601](https://www.iso.org/standard/40874.html), which
-cancels and replaces the second edition (ISO 8601:2000) with minor
-revisions.
+Times (with optional `Z`, `±HH`, `±HHMM`, or `±HH:MM` offset):
 
-For a (non-exhaustive) list of supported formats, execute the example
-function ExampleParseISODatetime from example_test.go to see a range of
-supported format examples.
+| Format             | Example           |
+|--------------------|-------------------|
+| `HH`               | `14`              |
+| `HH:MM` / `HHMM`   | `14:30`           |
+| `HH:MM:SS`         | `14:30:00`        |
+| `HH:MM:SS.ffffff`  | `14:30:00.123456` |
 
-The following is a list of ways in which this the exported functions in this
-package deviates from the ISO-8601:2004 standard:
+Datetimes are any date + any time joined by a non-numeric ASCII separator (`T` is standard; `space`, `_`, `-`, etc. are also accepted).
 
-- The standard is strict about "T" being the separator between date and time. This package allows any ASCII character except 0 thru 9 as the separator between date and time, rather than just "T".
-- The standard allows years less than 0 and greater than 9999. This package only permits years greater than 0 and less than 10,000.
-- This package does not support parsing time intervals or recurring time intervals as defined in sections 4.4 and 4.5 of the standard, respectively.
-- The standard technically allows "19" to represent the date 1900-01-01, or "23" to represent the time 23:00:00, as "representation[s] with reduced accuracy." This package does not allow these formats.  (Although YYYY-MM and YYYY are valid here.)
-- Unless otherwise note, this package does not support "expanded representations" for dates (sections 4.1.2.4, 4.1.3.3, 4.1.4.4).
-- Representations that "are only allowed by mutual agreement of the partners in information exchange" are generally not valid under this package.
-- Support for fractional components other than seconds is part of the ISO-8601 standard, but is not currently implemented in this parser.  (This follows Python's dateutil.) For instance (from Wikipedia): "To denote '14 hours, 30 and one half minutes,' do not include a seconds figure. Represent it as '14:30,5', '1430,5', '14:30.5', or '1430.5'."  These 4 datetime strings will return a ParseError from ParseISODatetime.
+## API
 
-
-## Other Notes
-
-In addition to following closely with dateutil's isoparser module, this
-package also ports code from Python's native datetime module and Go's time
-package.
-
-## Exported Objects
-
-```
-func ParseISODate(dateString string) (time.Time, error)
-func ParseISODatetime(datetime string) (time.Time, error)
-func ParseISOTime(timeString string) (components [4]int, tz *time.Location, err error)
+```go
+func ParseDatetime(s string) (time.Time, error)
+func ParseDate(s string) (time.Time, error)
+func ParseTime(s string) (components [4]int, tz *time.Location, err error)
 func SetLoc(t time.Time, loc *time.Location) time.Time
-type ParseError struct{ ... }
+
+type ParseError struct {
+    Datetime string
+    Message  string
+}
 ```
+
+`ParseDatetime` accepts date-only input as well, but `ParseDate` is faster when the caller knows no time component is present. Parse failures return a `*ParseError` — check via `errors.As`.
+
+## Time zone handling
+
+Go's `time.Time` has no concept of a naive datetime; a `Location` is mandatory. This package follows these rules:
+
+- **No offset in the input** → result uses `time.Local`.
+- **Offset present** (`Z`, `±HH`, `±HHMM`, `±HH:MM`) → result uses `time.FixedZone("UTC", secondsEast)`. No IANA name is inferred; e.g. `-05:00` is inherently ambiguous between EST, ECT, COT, etc.
+- **Unicode minus sign** (U+2212) is accepted in place of ASCII `-`.
+
+`SetLoc(t, loc)` returns a new `time.Time` with the same wall-clock components but a different `Location` — unlike `time.Time.In`, which preserves the instant and shifts the wall clock.
+
+## Conformance to ISO 8601
+
+Conforms mostly to [ISO 8601:2004](https://www.iso.org/standard/40874.html). Known deviations:
+
+- Separator between date and time may be any non-numeric ASCII character, not strictly `T`.
+- Years are restricted to `0001`–`9999` (no expanded representations, no negative years).
+- Time intervals and recurring intervals (§4.4, §4.5) are not parsed.
+- Reduced-accuracy century/hour representations (`"19"` for 1900, `"23"` for 23:00:00) are not accepted.
+- Fractional minutes/hours (e.g. `14:30,5`) are not parsed; only fractional seconds are supported.
+- Second-fraction precision beyond 9 digits is truncated (Go's `time` has nanosecond precision).
+
+## Testing
+
+```
+go test -race -cover ./...
+```
+
+Current statement coverage: **99.5%**. The single uncovered line is a defensive branch in `ParseDatetime` that is unreachable under the current control flow.
+
+CI runs on Go 1.25 and 1.26 across Linux, macOS, and Windows, plus a `golangci-lint` lint job on every push and PR.
+
+## License
+
+[Apache License 2.0](LICENSE).
