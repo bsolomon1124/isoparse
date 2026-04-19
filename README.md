@@ -4,7 +4,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/bsolomon1124/isoparse.svg)](https://pkg.go.dev/github.com/bsolomon1124/isoparse)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bsolomon1124/isoparse)](https://goreportcard.com/report/github.com/bsolomon1124/isoparse)
 [![Coverage](https://img.shields.io/badge/coverage-99.5%25-brightgreen)](#testing)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Package `isoparse` parses ISO 8601 date, time, and datetime strings into Go `time.Time` values — without requiring the caller to specify a layout in advance.
 
@@ -121,4 +121,4 @@ CI runs on Go 1.25 and 1.26 across Linux, macOS, and Windows, plus a `golangci-l
 
 ## License
 
-[Apache License 2.0](LICENSE).
+MIT — see [LICENSE](LICENSE).
