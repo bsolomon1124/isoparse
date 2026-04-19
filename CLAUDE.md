@@ -48,3 +48,7 @@ Both return a cursor position `pos`. `ParseDatetime` uses `pos < len(datetime)` 
 - Don't shadow Go 1.21+ builtins (`min`, `max`, `clear`) with local helpers.
 - `.golangci.yml` uses the v2 config schema (required by golangci-lint 2.x). The enabled linters are intentionally conservative — `staticcheck` has already caught one real latent bug (SA4003 in separator validation), so treat its findings as substantive, not stylistic.
 - `CHANGELOG`-style comments (e.g. `// removed X`, `// renamed from Y`) are not used; the git history is the source of truth.
+
+## Pull request titles
+
+Follow Conventional Commits format: `<type>: <description>` (e.g. `chore: update dependencies`, `fix: handle edge case`, `feat: add new parse function`).
