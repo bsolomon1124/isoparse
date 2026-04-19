@@ -671,7 +671,8 @@ func TestStrictDateNilLoc(t *testing.T) {
 }
 
 // TestParseTimezoneUnicodeMinus exercises the U+2212 MINUS SIGN path
-// (regression test: a previous byte-level comparison could never match).
+// directly through parseTimezone (regression test: a previous byte-level
+// comparison could never match).
 func TestParseTimezoneUnicodeMinus(t *testing.T) {
 	cases := map[string]*time.Location{
 		"\u22120500":  time.FixedZone("UTC", -5*60*60),
@@ -688,6 +689,33 @@ func TestParseTimezoneUnicodeMinus(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf(`parseTimezone(%q) = %v; want %v`, tzString, got, want)
 		}
+	}
+}
+
+// TestParseTimeUnicodeMinus exercises the U+2212 MINUS SIGN path end-to-end
+// through ParseTime and ParseDatetime. Regression test: the dispatch check
+// in ParseTime was a byte-level compare that couldn't match the multi-byte
+// first byte of U+2212 (0xE2), so the offset was silently ignored and the
+// call returned an "unused components" error instead of honoring the zone.
+func TestParseTimeUnicodeMinus(t *testing.T) {
+	wantZone := time.FixedZone("UTC", -5*60*60)
+
+	// ParseTime should recognize U+2212 as a sign and honor the offset.
+	_, tz, err := ParseTime("14:30:45\u22120500")
+	if err != nil {
+		t.Fatalf(`ParseTime("14:30:45\u22120500") -> err %v; want nil`, err)
+	}
+	if !reflect.DeepEqual(tz, wantZone) {
+		t.Errorf(`ParseTime(...) tz = %v; want %v`, tz, wantZone)
+	}
+
+	// End-to-end through ParseDatetime as well.
+	dt, err := ParseDatetime("2024-03-15T14:30:45\u22120500")
+	if err != nil {
+		t.Fatalf(`ParseDatetime with U+2212 offset -> err %v; want nil`, err)
+	}
+	if got := dt.Format(time.RFC3339); got != "2024-03-15T14:30:45-05:00" {
+		t.Errorf(`ParseDatetime with U+2212 offset = %q; want %q`, got, "2024-03-15T14:30:45-05:00")
 	}
 }
 

@@ -430,7 +430,10 @@ func ParseTime(timeString string) (components [4]int, tz *time.Location, err err
 	for pos < length && comp < 4 {
 		comp++
 
-		if start := timeString[pos]; start == 'Z' || start == '+' || start == '-' {
+		// Timezone boundary detected. Decode a rune rather than a byte so
+		// that the multi-byte U+2212 MINUS SIGN also dispatches here;
+		// parseTimezone is documented to accept it alongside ASCII -.
+		if r, _ := utf8.DecodeRuneInString(timeString[pos:]); r == 'Z' || r == '+' || r == '-' || r == '\u2212' {
 			tz, err = parseTimezone(timeString[pos:])
 			if err != nil {
 				return components, tz, err
