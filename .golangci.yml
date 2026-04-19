@@ -1,0 +1,20 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck      # unchecked errors
+    - govet         # go vet
+    - ineffassign   # ineffective assignments
+    - staticcheck   # modern static analysis suite (includes stylecheck, simple, unused)
+    - unused        # dead code
+    - misspell      # common English misspellings in comments
+    - unconvert     # redundant type conversions
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

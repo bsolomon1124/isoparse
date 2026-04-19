@@ -14,6 +14,7 @@ package isoparse
 // 		discussion of equality testing for Time values.
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ var invalidDatetimes = []string{
 }
 
 // Note that we don't include stuff like "25" or "14:60" here (invalid components).
-// This will be caught in ParseISODatetime, but not in ParseISOTime, because it just reurns components.
+// This will be caught in ParseDatetime, but not in ParseTime, because it just reurns components.
 var invalidTimes = []string{
 	"3",                    //  ISO string too short
 	"14時30分15秒",            //  Not ASCII
@@ -287,22 +288,27 @@ var differentSepISODatetimes = map[string]time.Time{
 	"20140101-14:33:09": time.Date(2014, 1, 1, 14, 33, 9, 0, time.Local),
 }
 
-// Bad parameters for `strictDate()`
+// Bad parameters for strictDate.
+// Note: only one unit may be out of range per row — strictDate checks units
+// in order and returns on the first failure, so earlier-checked units must
+// be in range for later-checked branches to fire.
 var invalidParams = [][]int{
-	{10001, 7, 4, 30, 30, 30, 100},     // Bad year
-	{-1, 7, 4, 30, 30, 30, 100},        // Bad year
-	{2000, 0, 4, 30, 30, 30, 100},      // Bad month
-	{2000, 14, 4, 30, 30, 30, 100},     // Bad month
-	{2000, 7, 32, 30, 30, 30, 100},     // Bad day (for given month)
-	{2000, 2, 30, 30, 30, 30, 100},     // Bad day (for given month)
+	{10001, 7, 4, 12, 30, 30, 100},     // Bad year
+	{-1, 7, 4, 12, 30, 30, 100},        // Bad year
+	{2000, 0, 4, 12, 30, 30, 100},      // Bad month
+	{2000, 14, 4, 12, 30, 30, 100},     // Bad month
+	{2000, 7, 32, 12, 30, 30, 100},     // Bad day (for given month)
+	{2000, 2, 30, 12, 30, 30, 100},     // Bad day (for given month)
 	{2000, 7, 4, -1, 30, 30, 100},      // Bad hour
-	{2000, 7, 4, 25, 30, 30, 100},      // Bad hour (note: 24 is ok, contingent)
-	{2000, 7, 4, 60, 30, 30, 100},      // Bad minute
-	{2000, 7, 4, 61, 30, 30, 100},      // Bad minute
-	{2000, 7, 4, 30, 61, 30, 100},      // Bad second
-	{2000, 7, 4, 30, 60, 30, 100},      // Bad second
-	{2000, 7, 4, 30, 30, 30, -1},       // Bad nsec
-	{2000, 7, 4, 30, 30, 30, int(1e9)}, // Bad nsec
+	{2000, 7, 4, 25, 30, 30, 100},      // Bad hour (24 is ok, contingent)
+	{2000, 7, 4, 12, 60, 30, 100},      // Bad minute
+	{2000, 7, 4, 12, 61, 30, 100},      // Bad minute
+	{2000, 7, 4, 12, -1, 30, 100},      // Bad minute
+	{2000, 7, 4, 12, 30, 60, 100},      // Bad second
+	{2000, 7, 4, 12, 30, 61, 100},      // Bad second
+	{2000, 7, 4, 12, 30, -1, 100},      // Bad second
+	{2000, 7, 4, 12, 30, 30, -1},       // Bad nsec
+	{2000, 7, 4, 12, 30, 30, int(1e9)}, // Bad nsec
 }
 
 // Datetime strings with over 9 digits of second-fraction precision.
@@ -400,10 +406,15 @@ func TestDaysBeforeYear(t *testing.T) {
 }
 
 func TestCalcWeekdate(t *testing.T) {
+	// calcWeekdate is purely calendrical — compare date components, not instants,
+	// so the test is invariant to whatever Location either side happens to carry.
 	for arr, trueDate := range isoToGregorian {
-		if tm, err := calcWeekdate(arr[0], arr[1], arr[2]); err != nil {
-			t.Errorf(`calcWeekdate(%d, %d, %d) -> -> non-nill error (%v) for valid input`, arr[0], arr[1], arr[2], err)
-		} else if !tm.Equal(trueDate) {
+		tm, err := calcWeekdate(arr[0], arr[1], arr[2])
+		if err != nil {
+			t.Errorf(`calcWeekdate(%d, %d, %d) -> non-nil error (%v) for valid input`, arr[0], arr[1], arr[2], err)
+			continue
+		}
+		if tm.Year() != trueDate.Year() || tm.Month() != trueDate.Month() || tm.Day() != trueDate.Day() {
 			t.Errorf(`calcWeekdate(%d, %d, %d) -> %v (should be %v)`, arr[0], arr[1], arr[2], tm, trueDate)
 		}
 	}
@@ -419,59 +430,59 @@ func TestISOCalendar(t *testing.T) {
 
 // //////////////////////////////////////////////////
 // Tests of the core parsing functions:
-// - parseISODateCommon
-// - parseISODateUncommon
-// - ParseISOTime
+// - parseDateCommon
+// - parseDateUncommon
+// - ParseTime
 // - parseTimezone
-// - ParseISODatetime (exported)
-// - ParseISODate     (exported)
+// - ParseDatetime (exported)
+// - ParseDate     (exported)
 //
 // Note that the unexported functions may "ignore" some cases purposefully: these are cases that
 // they, by design, should not catch independently, but only deal with in coordination with other
-// functions when wrapped together in `ParseISODatetime()` and `ParseISODate()`
+// functions when wrapped together in `ParseDatetime()` and `ParseDate()`
 // //////////////////////////////////////////////////
 
-func TestParseISODateCommon(t *testing.T) {
+func TestParseDateCommon(t *testing.T) {
 	for dateString, trueDate := range commonDates {
-		components, _, err := parseISODateCommon(dateString)
+		components, _, err := parseDateCommon(dateString)
 		if err != nil {
-			t.Errorf(`parseISODateCommon(%q) -> non-nill error (%v) for valid time string`, dateString, err)
+			t.Errorf(`parseDateCommon(%q) -> non-nill error (%v) for valid time string`, dateString, err)
 		} else if (components[0] != trueDate.Year()) || (components[1] != int(trueDate.Month())) || (components[2] != trueDate.Day()) {
-			t.Errorf(`parseISODateCommon(%q) -> %v (should be %v)`, dateString, components, trueDate)
+			t.Errorf(`parseDateCommon(%q) -> %v (should be %v)`, dateString, components, trueDate)
 		}
 	}
 }
 
-func TestParseISODateUncommon(t *testing.T) {
+func TestParseDateUncommon(t *testing.T) {
 	for dateString, trueDate := range uncommonDates {
-		components, _, err := parseISODateUncommon(dateString)
+		components, _, err := parseDateUncommon(dateString)
 		if err != nil {
-			t.Errorf(`parseISODateUncommon(%q) -> non-ok response produced %v`, dateString, components)
+			t.Errorf(`parseDateUncommon(%q) -> non-ok response produced %v`, dateString, components)
 		} else if (components[0] != trueDate.Year()) || (components[1] != int(trueDate.Month())) || (components[2] != trueDate.Day()) {
-			t.Errorf(`parseISODateUncommon(%q) -> %v (should be %v)`, dateString, components, trueDate)
+			t.Errorf(`parseDateUncommon(%q) -> %v (should be %v)`, dateString, components, trueDate)
 		}
 	}
 }
 
-func TestParseISODate(t *testing.T) {
+func TestParseDate(t *testing.T) {
 	for dateString, trueDate := range commonDates {
-		if components, _, err := parseISODate(dateString); err != nil {
+		if components, _, err := parseDate(dateString); err != nil {
 			t.Errorf(`non-nil error`)
 		} else if (components[0] != trueDate.Year()) || (components[1] != int(trueDate.Month())) || (components[2] != trueDate.Day()) {
-			t.Errorf(`parseISODate(%q) -> %v (should be %v)`, dateString, components, trueDate)
+			t.Errorf(`parseDate(%q) -> %v (should be %v)`, dateString, components, trueDate)
 		}
 	}
 }
 
-func TestParseISOTime(t *testing.T) {
+func TestParseTime(t *testing.T) {
 	for timeString, trueComp := range timesWithComponents {
-		components, _, err := ParseISOTime(timeString)
+		components, _, err := ParseTime(timeString)
 		if err != nil {
-			t.Errorf(`ParseISOTime(%q) -> non-nil error (%v) for valid time string`, timeString, err)
+			t.Errorf(`ParseTime(%q) -> non-nil error (%v) for valid time string`, timeString, err)
 		} else {
 			for i := 0; i <= 3; i++ {
 				if components[i] != trueComp[i] {
-					t.Errorf(`ParseISOTime(%q) -> %v (should be %v)`, timeString, components, trueComp)
+					t.Errorf(`ParseTime(%q) -> %v (should be %v)`, timeString, components, trueComp)
 				}
 			}
 		}
@@ -491,12 +502,12 @@ func TestParseTimezone(t *testing.T) {
 	}
 }
 
-func TestParseISODatetime(t *testing.T) {
+func TestParseDatetime(t *testing.T) {
 	for datetime, c := range allFormats {
-		if dt, err := ParseISODatetime(datetime); err != nil {
-			t.Errorf(`ParseISODatetime(%q) -> non-nil error (%v) for valid datetime string`, datetime, err)
+		if dt, err := ParseDatetime(datetime); err != nil {
+			t.Errorf(`ParseDatetime(%q) -> non-nil error (%v) for valid datetime string`, datetime, err)
 		} else if !dt.Equal(c.t) {
-			t.Errorf(`ParseISODatetime(%q) -> %v (should be %v)`, datetime, dt, c.t)
+			t.Errorf(`ParseDatetime(%q) -> %v (should be %v)`, datetime, dt, c.t)
 		}
 	}
 }
@@ -508,16 +519,16 @@ func TestParseISODatetime(t *testing.T) {
 // Make sure we're not allowing what is a disallowed ambiguous pattern (confusable with YYMMDD).
 func TestInvalidYYYYMM(t *testing.T) {
 	for _, dateString := range invalidYYYYMM {
-		if components, _, err := parseISODate(dateString); err == nil {
-			t.Errorf(`parseISODate(%q) -> %v (for invalid YYYYMM) returned nil error`, dateString, components)
+		if components, _, err := parseDate(dateString); err == nil {
+			t.Errorf(`parseDate(%q) -> %v (for invalid YYYYMM) returned nil error`, dateString, components)
 		}
 	}
 }
 
 func TestInvalidDate(t *testing.T) {
 	for _, dateString := range invalidDates {
-		if dt, err := ParseISODate(dateString); err == nil {
-			t.Errorf(`ParseISODate(%q) -> %v returned nil error (invalid dateString should error)`, dateString, dt)
+		if dt, err := ParseDate(dateString); err == nil {
+			t.Errorf(`ParseDate(%q) -> %v returned nil error (invalid dateString should error)`, dateString, dt)
 		}
 	}
 
@@ -525,8 +536,8 @@ func TestInvalidDate(t *testing.T) {
 
 func TestInvalidTime(t *testing.T) {
 	for _, timeString := range invalidTimes {
-		if _, _, err := ParseISOTime(timeString); err == nil {
-			t.Errorf(`ParseISOTime(%q) returned nil error (invalid timeString should error)`, timeString)
+		if _, _, err := ParseTime(timeString); err == nil {
+			t.Errorf(`ParseTime(%q) returned nil error (invalid timeString should error)`, timeString)
 		}
 	}
 }
@@ -541,8 +552,8 @@ func TestAssertInvalidTz(t *testing.T) {
 
 func TestInvalidDatetime(t *testing.T) {
 	for _, datetime := range invalidDatetimes {
-		if _, err := ParseISODatetime(datetime); err == nil {
-			t.Errorf(`ParseISODatetime(%q) returned nil error (invalid datetime should error)`, datetime)
+		if _, err := ParseDatetime(datetime); err == nil {
+			t.Errorf(`ParseDatetime(%q) returned nil error (invalid datetime should error)`, datetime)
 		}
 	}
 }
@@ -553,10 +564,10 @@ func TestInvalidDatetime(t *testing.T) {
 
 func TestUnequalISOWeekDay(t *testing.T) {
 	for datetime, trueDate := range unequalGregorianISO {
-		if tm, err := ParseISODatetime(datetime); err != nil {
-			t.Errorf(`ParseISODatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
+		if tm, err := ParseDatetime(datetime); err != nil {
+			t.Errorf(`ParseDatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
 		} else if !tm.Equal(trueDate) {
-			t.Errorf(`ParseISODatetime(%q) -> %v should (should be %v)`, datetime, tm, trueDate)
+			t.Errorf(`ParseDatetime(%q) -> %v should (should be %v)`, datetime, tm, trueDate)
 		}
 	}
 }
@@ -573,22 +584,22 @@ func TestTzZeroUTC(t *testing.T) {
 
 func TestMidnight(t *testing.T) {
 	for datetime, trueDate := range midnightISODatetimes {
-		tm, err := ParseISODatetime(datetime)
+		tm, err := ParseDatetime(datetime)
 		if err != nil {
-			t.Errorf(`ParseISODatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
+			t.Errorf(`ParseDatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
 		} else if !tm.Equal(trueDate) {
-			t.Errorf(`ParseISODatetime(%q) -> %v (should be %v)`, datetime, tm, trueDate)
+			t.Errorf(`ParseDatetime(%q) -> %v (should be %v)`, datetime, tm, trueDate)
 		}
 	}
 }
 
 func TestSep(t *testing.T) {
 	for datetime, trueDate := range differentSepISODatetimes {
-		tm, err := ParseISODatetime(datetime)
+		tm, err := ParseDatetime(datetime)
 		if err != nil {
-			t.Errorf(`ParseISODatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
+			t.Errorf(`ParseDatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
 		} else if !tm.Equal(trueDate) {
-			t.Errorf(`ParseISODatetime(%q) -> %v (should be %v)`, datetime, tm, trueDate)
+			t.Errorf(`ParseDatetime(%q) -> %v (should be %v)`, datetime, tm, trueDate)
 		}
 
 	}
@@ -597,10 +608,187 @@ func TestSep(t *testing.T) {
 // Make sure we truncate anything beyond 9 digits of precision for fraction component of time.
 func TestTruncateNsec(t *testing.T) {
 	for datetime, trueDate := range extraPrecision {
-		if tm, err := ParseISODatetime(datetime); err != nil {
-			t.Errorf(`ParseISODatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
+		if tm, err := ParseDatetime(datetime); err != nil {
+			t.Errorf(`ParseDatetime(%q) -> non-nil error (%v) for valid datetime`, datetime, err)
 		} else if !tm.Equal(trueDate) {
-			t.Errorf(`ParseISODatetime(%q) -> %v should truncate seconds fraction (should be %v)`, datetime, tm, trueDate)
+			t.Errorf(`ParseDatetime(%q) -> %v should truncate seconds fraction (should be %v)`, datetime, tm, trueDate)
+		}
+	}
+}
+
+// TestParseErrorString covers ParseError.Error() for both branches (with and
+// without a Message) and the errors.As round-trip.
+func TestParseErrorString(t *testing.T) {
+	withMsg := &ParseError{Datetime: "2014-13-01", Message: "month out of valid range"}
+	if got, want := withMsg.Error(), "cannot parse 2014-13-01: month out of valid range"; got != want {
+		t.Errorf(`(*ParseError).Error() = %q, want %q`, got, want)
+	}
+	noMsg := &ParseError{Datetime: "gibberish"}
+	if got, want := noMsg.Error(), "cannot parse gibberish"; got != want {
+		t.Errorf(`(*ParseError).Error() with empty Message = %q, want %q`, got, want)
+	}
+	var pe *ParseError
+	_, err := ParseDate("2014/12/03")
+	if err == nil {
+		t.Fatal(`ParseDate("2014/12/03") returned nil error`)
+	}
+	if !errors.As(err, &pe) {
+		t.Errorf(`errors.As(err, *ParseError) returned false; want true (err=%T)`, err)
+	}
+	if pe.Datetime == "" {
+		t.Errorf(`*ParseError.Datetime is empty; want original input`)
+	}
+}
+
+// TestSetLoc verifies SetLoc re-attaches a Location without shifting the
+// wall-clock components (unlike time.Time.In).
+func TestSetLoc(t *testing.T) {
+	tz := time.FixedZone("UTC", -5*60*60)
+	src := time.Date(2023, time.June, 15, 10, 30, 45, 123, time.UTC)
+	got := SetLoc(src, tz)
+	if got.Year() != src.Year() || got.Month() != src.Month() || got.Day() != src.Day() ||
+		got.Hour() != src.Hour() || got.Minute() != src.Minute() || got.Second() != src.Second() ||
+		got.Nanosecond() != src.Nanosecond() {
+		t.Errorf(`SetLoc changed wall-clock components: src=%v got=%v`, src, got)
+	}
+	if got.Location() != tz {
+		t.Errorf(`SetLoc location = %v, want %v`, got.Location(), tz)
+	}
+	if in := src.In(tz); in.Hour() == got.Hour() {
+		t.Errorf(`SetLoc should differ from time.Time.In: SetLoc=%v, In=%v`, got, in)
+	}
+}
+
+// TestStrictDateNilLoc covers the loc == nil → time.Local fallback in strictDate.
+func TestStrictDateNilLoc(t *testing.T) {
+	tm, err := strictDate(2023, time.June, 15, 12, 30, 45, 0, nil)
+	if err != nil {
+		t.Fatalf(`strictDate(..., nil) returned error: %v`, err)
+	}
+	if tm.Location() != time.Local {
+		t.Errorf(`strictDate(..., nil) loc = %v, want time.Local`, tm.Location())
+	}
+}
+
+// TestParseTimezoneUnicodeMinus exercises the U+2212 MINUS SIGN path
+// directly through parseTimezone (regression test: a previous byte-level
+// comparison could never match).
+func TestParseTimezoneUnicodeMinus(t *testing.T) {
+	cases := map[string]*time.Location{
+		"\u22120500":  time.FixedZone("UTC", -5*60*60),
+		"\u221205:00": time.FixedZone("UTC", -5*60*60),
+		"\u221205":    time.FixedZone("UTC", -5*60*60),
+		"\u22120000":  time.UTC,
+	}
+	for tzString, want := range cases {
+		got, err := parseTimezone(tzString)
+		if err != nil {
+			t.Errorf(`parseTimezone(%q) -> err %v; want nil`, tzString, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf(`parseTimezone(%q) = %v; want %v`, tzString, got, want)
+		}
+	}
+}
+
+// TestParseTimeUnicodeMinus exercises the U+2212 MINUS SIGN path end-to-end
+// through ParseTime and ParseDatetime. Regression test: the dispatch check
+// in ParseTime was a byte-level compare that couldn't match the multi-byte
+// first byte of U+2212 (0xE2), so the offset was silently ignored and the
+// call returned an "unused components" error instead of honoring the zone.
+func TestParseTimeUnicodeMinus(t *testing.T) {
+	wantZone := time.FixedZone("UTC", -5*60*60)
+
+	// ParseTime should recognize U+2212 as a sign and honor the offset.
+	_, tz, err := ParseTime("14:30:45\u22120500")
+	if err != nil {
+		t.Fatalf(`ParseTime("14:30:45\u22120500") -> err %v; want nil`, err)
+	}
+	if !reflect.DeepEqual(tz, wantZone) {
+		t.Errorf(`ParseTime(...) tz = %v; want %v`, tz, wantZone)
+	}
+
+	// End-to-end through ParseDatetime as well.
+	dt, err := ParseDatetime("2024-03-15T14:30:45\u22120500")
+	if err != nil {
+		t.Fatalf(`ParseDatetime with U+2212 offset -> err %v; want nil`, err)
+	}
+	if got := dt.Format(time.RFC3339); got != "2024-03-15T14:30:45-05:00" {
+		t.Errorf(`ParseDatetime with U+2212 offset = %q; want %q`, got, "2024-03-15T14:30:45-05:00")
+	}
+}
+
+// TestParseDateUncommonInconsistentSep covers the separator-consistency
+// branches in parseDateUncommon for ordinal dates.
+func TestParseDateUncommonInconsistentSep(t *testing.T) {
+	cases := []string{
+		"19850-95",  // !hasSep at pos 4, but dash at index length-3 → inconsistent
+		"1985-0951", // hasSep at pos 4, no dash at index length-3 → inconsistent
+	}
+	for _, s := range cases {
+		if _, _, err := parseDateUncommon(s); err == nil {
+			t.Errorf(`parseDateUncommon(%q) returned nil error; want inconsistent-separator error`, s)
+		}
+	}
+}
+
+// TestParseDateUncommonTruncated covers the bounds-check branches for
+// truncated ISO-week and incomplete-date inputs. These were exposed by
+// fuzzing and are checked here as unit tests so they're covered in standard
+// `go test` runs.
+func TestParseDateUncommonTruncated(t *testing.T) {
+	cases := []string{
+		"0000-",     // incomplete after YYYY-
+		"2024W",     // W but no week number
+		"2024W5",    // W with only 1 digit of week number
+		"2024-W",    // separator + W with no week number
+		"2024-W15-", // week given but trailing sep with no day digit
+		"2024-W15",  // valid W15 without a day — accepted
+	}
+	// All except the valid-week case should error.
+	for _, s := range cases[:len(cases)-1] {
+		if _, _, err := parseDateUncommon(s); err == nil {
+			t.Errorf(`parseDateUncommon(%q) returned nil error; want truncated-input error`, s)
+		}
+	}
+	// Sanity: the known-valid case should succeed.
+	if _, _, err := parseDateUncommon(cases[len(cases)-1]); err != nil {
+		t.Errorf(`parseDateUncommon(%q) returned err %v; want nil`, cases[len(cases)-1], err)
+	}
+}
+
+// TestParseDatetimeBadSeparator covers the separator-validation path in
+// ParseDatetime: the separator must be a non-numeric ASCII character.
+func TestParseDatetimeBadSeparator(t *testing.T) {
+	cases := []string{
+		"2014-04-1212:00:00",    // digit after valid date (no real separator)
+		"2014-04-12\x8014:00",   // non-ASCII byte
+		"2014-04-12\xff14:00",   // non-ASCII byte
+		"2014-04-12\u00a014:00", // non-breaking space (multi-byte UTF-8)
+	}
+	for _, s := range cases {
+		if _, err := ParseDatetime(s); err == nil {
+			t.Errorf(`ParseDatetime(%q) returned nil error; want separator error`, s)
+		}
+	}
+}
+
+// TestParseDatetimeTimeError covers the valid-date / bad-time branch.
+func TestParseDatetimeTimeError(t *testing.T) {
+	cases := []string{
+		"2014-04-11T03:30+",        // TZ too short
+		"2014-04-11T03:30+1234567", // TZ too long
+		"2014-04-11T24:01:00",      // 24:xx non-midnight
+	}
+	for _, s := range cases {
+		tm, err := ParseDatetime(s)
+		if err == nil {
+			t.Errorf(`ParseDatetime(%q) returned nil error; want time parse error`, s)
+			continue
+		}
+		if !tm.IsZero() && tm.Year() != 1 {
+			t.Errorf(`ParseDatetime(%q) returned usable Time %v on error`, s, tm)
 		}
 	}
 }
